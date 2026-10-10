@@ -1,0 +1,47 @@
+{
+  "name": "opencode-telegram-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Telegram bot to control and command OpenCode sessions",
+  "type": "module",
+  "license": "MIT",
+  "author": "Lorenzo Romandini",
+  "homepage": "https://github.com/lorenzoromandini/opencode-telegram-bot#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lorenzoromandini/opencode-telegram-bot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lorenzoromandini/opencode-telegram-bot/issues"
+  },
+  "keywords": [
+    "opencode",
+    "telegram",
+    "bot",
+    "grammy",
+    "ai",
+    "deepseek"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "setup": "tsx scripts/setup.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "e2e": "tsx scripts/e2e.ts"
+  },
+  "dependencies": {
+    "@opencode/client": "^2.0.26",
+    "dotenv": "^17.4.2",
+    "grammy": "^1.46.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
