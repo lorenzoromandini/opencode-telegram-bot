@@ -110,14 +110,17 @@ Note:
 | `/id` | Mostra il tuo user ID |
 | `/help` | Aiuto |
 
-**Inviare un prompt**: con una sessione attiva, scrivi un normale messaggio di testo. La
-risposta dell'agente appare in un messaggio che si **aggiorna in tempo reale** (testo, stato
-dei tool, reasoning). Al termine, il messaggio viene completato e suddiviso se troppo lungo.
+**Inviare un prompt**: con una sessione attiva, scrivi un normale messaggio di testo. Il bot
+**non** invia nessun messaggio di conferma al momento dell'invio. Mentre l'agente lavora, il
+testo appare in un messaggio che si **aggiorna in tempo reale ma in silenzio** (nessuna
+notifica, nessun elenco di tool, percorsi o comandi shell). Quando la risposta è pronta, il
+bot la consegna come **messaggio nuovo**: è questo che genera l'unica **notifica**, nel momento
+in cui l'agente ha finito ed è di nuovo in attesa del tuo input. Il messaggio finale contiene
+la **sola risposta in linguaggio naturale** dell'agente, più il footer di attesa.
 
 **Prompt avviati fuori da Telegram**: se la stessa sessione viene usata dalla TUI di OpenCode
-(o da un altro client), il bot **osserva** comunque l'esecuzione. Invia un messaggio
-"⏳ OpenCode sta elaborando…" che si aggiorna con il progresso e, quando l'agente ha finito e
-torna in attesa di input, lo trasforma nella **risposta finale** chiudendo con
+(o da un altro client), il bot **osserva** comunque l'esecuzione e, quando l'agente ha finito
+e torna in attesa di input, pubblica la **risposta finale** chiudendo con
 "⏸️ In attesa del tuo input": da lì puoi rispondere direttamente da Telegram. L'osservazione
 vale solo per le sessioni selezionate (con `/use`) e con le notifiche attive (`/notify on`).
 

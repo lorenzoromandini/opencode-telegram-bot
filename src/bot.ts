@@ -424,19 +424,13 @@ export function createBot(deps: BotDeps): Bot {
       return;
     }
     const sessionID = st.sessionID;
-    const messageId = await engine.begin(sessionID, chatId);
+    await engine.begin(sessionID, chatId);
     try {
       await client.session.prompt({ sessionID, text });
     } catch (err: unknown) {
       engine.abort(sessionID);
       const msg = escapeHtml(oneLine((err as Error).message, 300));
-      if (messageId !== undefined) {
-        await ctx.api
-          .editMessageText(chatId, messageId, `❌ <i>${msg}</i>`, { parse_mode: "HTML" })
-          .catch(() => undefined);
-      } else {
-        await ctx.reply(`❌ ${msg}`, { parse_mode: "HTML" });
-      }
+      await ctx.reply(`❌ ${msg}`, { parse_mode: "HTML" });
     }
   }));
 

@@ -55,8 +55,6 @@ export interface EngineOptions {
   allChats: () => number[];
 }
 
-const TOOL_ICON = { running: "⏳", done: "✅", error: "❌" } as const;
-const MAX_TOOLS_SHOWN = 8;
 const WAITING_FOOTER =
   "⏸️ <i>In attesa del tuo input: rispondi con un messaggio per continuare.</i>";
 
@@ -100,35 +98,16 @@ export class SessionEngine {
     const run = this.createRun(sessionID, false);
     // register immediately so the execution.started notification is suppressed
     this.runs.set(sessionID, run);
-    await this.attachTarget(run, chatId, "⏳ <i>Invio a OpenCode…</i>");
-    return run.targets.get(chatId);
+    // No placeholder is sent up front: the first message appears only when the
+    // agent produces real output, so sending an input does not trigger an
+    // immediate (and useless) Telegram notification.
+    this.attachTarget(run, chatId);
+    return undefined;
   }
 
-  /** Send the first placeholder message to a chat and register it as a target. */
-  private async attachTarget(
-    run: Run,
-    chatId: number,
-    text: string,
-  ): Promise<number | undefined> {
-    let messageId: number;
-    try {
-      const msg = await this.opts.api().sendMessage(chatId, text, { parse_mode: "HTML" });
-      messageId = msg.message_id;
-    } catch (err: unknown) {
-      log.error("invio messaggio iniziale fallito:", (err as Error).message);
-      return undefined;
-    }
-    if (this.runs.get(run.sessionID) !== run) {
-      // The run ended while we were sending: drop the now-orphan placeholder.
-      try {
-        await this.opts.api().deleteMessage(chatId, messageId);
-      } catch {
-        /* ignore */
-      }
-      return undefined;
-    }
-    run.targets.set(chatId, messageId);
-    return messageId;
+  /** Register a chat as a silent target of the run (no placeholder message). */
+  private attachTarget(run: Run, chatId: number): void {
+    run.targets.set(chatId, undefined);
   }
 
   /**
@@ -141,7 +120,7 @@ export class SessionEngine {
   ): Promise<void> {
     for (const { chatId } of chats) {
       if (this.runs.get(run.sessionID) !== run) return;
-      await this.attachTarget(run, chatId, "⏳ <i>OpenCode sta elaborando…</i>");
+      this.attachTarget(run, chatId);
     }
   }
 
@@ -346,6 +325,11 @@ export class SessionEngine {
       return;
     }
 
+    // Stay silent until the agent starts writing the answer: no message is sent
+    // for tool activity or reasoning, so the chat is only pinged once, when the
+    // actual textual reply begins.
+    if (!hasVisibleText(run)) return;
+
     const html = this.renderStream(run);
     if (!html || html === run.lastRendered) return;
     run.lastRendered = html;
@@ -353,32 +337,41 @@ export class SessionEngine {
       if (messageId !== undefined) {
         await this.edit(chatId, messageId, html);
       } else {
-        await this.send(chatId, html);
+        // Silent: the live progress must not ping the chat. The notification is
+        // fired by the final message sent in deliverFinal().
+        const sentId = await this.send(chatId, html, true);
+        if (sentId !== undefined) run.targets.set(chatId, sentId);
       }
     }
   }
 
   private async deliverFinal(run: Run): Promise<void> {
     const messages = this.renderFinalMessages(run);
+    const sendAll = async (chatId: number): Promise<void> => {
+      for (let i = 0; i < messages.length; i++) {
+        // Only the first final message notifies; the rest stay silent to avoid
+        // a burst of notifications for long answers.
+        await this.send(chatId, messages[i]!, i > 0);
+      }
+    };
     if (run.targets.size === 0) {
       // Observers weren't attached yet (or every send failed): fall back to
       // delivering the final answer as fresh messages to the watching chats.
       if (!run.observed) return;
       const chats = this.opts.chatsForSession(run.sessionID).filter((c) => c.notify);
       for (const { chatId } of chats) {
-        for (const m of messages) await this.send(chatId, m);
+        await sendAll(chatId);
       }
       return;
     }
     for (const [chatId, messageId] of run.targets) {
       if (messageId !== undefined) {
-        await this.edit(chatId, messageId, messages[0] ?? "(fine)");
-        for (let i = 1; i < messages.length; i++) {
-          await this.send(chatId, messages[i]!);
-        }
-      } else {
-        for (const m of messages) await this.send(chatId, m);
+        // Drop the silently streamed message and repost the answer as a brand
+        // new message, so Telegram actually fires a notification when the
+        // output is complete and the bot is waiting for input again.
+        await this.delete(chatId, messageId);
       }
+      await sendAll(chatId);
     }
   }
 
@@ -389,15 +382,15 @@ export class SessionEngine {
       const t = tail(body, 3000);
       parts.push(`${t.truncated ? "⋮ (in corso)\n" : ""}${escapeHtml(t.text)}`);
     }
-    const tools = this.renderTools(run);
-    if (tools) parts.push(tools);
     const reasoning = joinParts(run.reasoningParts);
     if (reasoning.trim().length > 0) {
       const t = tail(reasoning, 400);
       parts.push(`<blockquote expandable>🧠 ${escapeHtml(t.text)}</blockquote>`);
     }
-    if (body.trim().length === 0 && run.tools.size === 0) {
-      parts.push("<i>sto pensando…</i>");
+    if (body.trim().length === 0) {
+      parts.push(
+        anyToolRunning(run) ? "⚙️ <i>sto lavorando…</i>" : "<i>sto pensando…</i>",
+      );
     }
     let html = parts.join("\n\n");
     if (html.length > 4000) html = html.slice(html.length - 4000);
@@ -413,30 +406,11 @@ export class SessionEngine {
     ];
     const text = joinParts(run.textParts);
     const blocks: Block[] = parseBlocks(text);
-    const toolLines = this.toolSummaryLines(run);
-    if (toolLines.length > 0) {
-      blocks.push({ kind: "html", text: toolLines.join("\n") });
-    }
     if (blocks.length === 0) {
       blocks.push({ kind: "html", text: "<i>(nessun output testuale)</i>" });
     }
     blocks.push({ kind: "html", text: WAITING_FOOTER });
     return packBlocks(blocks, banners);
-  }
-
-  private renderTools(run: Run): string | undefined {
-    const lines = this.toolSummaryLines(run);
-    if (lines.length === 0) return undefined;
-    return lines.join("\n");
-  }
-
-  private toolSummaryLines(run: Run): string[] {
-    const ids = run.toolOrder.filter((id) => run.tools.has(id)).slice(-MAX_TOOLS_SHOWN);
-    return ids.map((id) => {
-      const t = run.tools.get(id)!;
-      const detail = t.detail ? ` · <i>${escapeHtml(t.detail)}</i>` : "";
-      return `${TOOL_ICON[t.status]} <code>${escapeHtml(t.name)}</code>${detail}`;
-    });
   }
 
   private async onPermission(data: Record<string, any>): Promise<void> {
@@ -483,11 +457,24 @@ export class SessionEngine {
     }
   }
 
-  private async send(chatId: number, html: string): Promise<void> {
+  private async send(chatId: number, html: string, silent = false): Promise<number | undefined> {
     try {
-      await this.opts.api().sendMessage(chatId, html, { parse_mode: "HTML" });
+      const msg = await this.opts.api().sendMessage(chatId, html, {
+        parse_mode: "HTML",
+        ...(silent ? { disable_notification: true } : {}),
+      });
+      return msg.message_id;
     } catch (err: unknown) {
       log.error("sendMessage fallito:", (err as Error).message);
+      return undefined;
+    }
+  }
+
+  private async delete(chatId: number, messageId: number): Promise<void> {
+    try {
+      await this.opts.api().deleteMessage(chatId, messageId);
+    } catch (err: unknown) {
+      log.debug("deleteMessage fallito:", (err as Error).message);
     }
   }
 
@@ -509,6 +496,22 @@ function joinParts(parts: Map<number, string>): string {
     .sort((a, b) => a[0] - b[0])
     .map(([, v]) => v)
     .join("");
+}
+
+/** True once the agent has produced some actual reply text to show. */
+function hasVisibleText(run: Run): boolean {
+  for (const part of run.textParts.values()) {
+    if (part.trim().length > 0) return true;
+  }
+  return false;
+}
+
+/** True while at least one tool is still running. */
+function anyToolRunning(run: Run): boolean {
+  for (const tool of run.tools.values()) {
+    if (tool.status === "running") return true;
+  }
+  return false;
 }
 
 function summarizeInput(input: unknown): string | undefined {
